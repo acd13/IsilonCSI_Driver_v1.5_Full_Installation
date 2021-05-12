@@ -50,7 +50,7 @@ else
 	unzip release-1.5.0.zip
 	mv csi-powerscale-release-1.5.0 /root/csi-powerscale
         printf "\nCheck below if you see the csi-powerscale directory listed\n"
-        ls /root/csi-isilon
+        ls /root/csi-powerscale
 fi
 
 sleep 4
@@ -75,11 +75,13 @@ printf "\nDone."
 
 
 #No harm in restarting below items repeatedly, it just needs more sleep time afterwards to wait for PODs to come on
-printf "\nNow restarting docker and kubernetes...waiting for 45 seconds to let everything settle\n\n"
+printf "\nNow restarting docker and kubernetes...waiting for 25 seconds to let everything settle\n\n"
 systemctl daemon-reload
+sleep 7
 systemctl restart docker
-#systemctl restart kubelet
-sleep 45
+sleep 7
+systemctl restart kubelet
+sleep 10
 echo ""
 
 
@@ -88,6 +90,16 @@ echo ""
 #Call the main function defined above
 main
 
+echo ""
+kubectl get pods -A
+printf "\nAre we able to see all the pods fine after restarting service? Sometimes it takes a few mins, check in another window. Type yes to proceed, otherwise no to quit: \n\n"
+read readynow
+if [ $readynow = yes ]
+then
+        :
+else
+        exit 0
+fi
 
 
 printf "\nNext, we create the isilon & the test namespace in the k8s cluster \n"
@@ -111,14 +123,19 @@ helm list
 #Below function is to handle the secret.yaml file mainly
 function secretstuff
 {
+printf "\nThe secret (isilon-creds) to be created in v1.5 is by editing the /root/csi-powerscale/helm/secret.json file.\n"
+printf "\nYou can specify multiple clusters here. This script only configures 1 cluster for now so we'll trim that file \n"
+
+printf "\nMaking a copy of /root/csi-powerscale/helm/secret.json \n"
+cp /root/csi-powerscale/helm/secret.json /root/csi-powerscale/helm/orig.secret.json
 
 kubectl get secret -n isilon | grep isilon-creds
 if [ $? -eq 0 ]
 then
-        printf "Looks like the secret is already created, skipping... \n"
+        printf "\n Looks like the secret is already created, skipping... \n"
         :
 else
-        printf "Let's edit the secret.json file first which is in /root/csi-powerscale/helm  \n"
+        printf "\nLet's edit the secret.json file first which is in /root/csi-powerscale/helm  \n"
         sleep 4
         printf "Enter Isilon username for CSI Driver (that has all the privs): \n"
         read isiuser
@@ -128,35 +145,49 @@ else
         read clusterip
         printf "Enter the name of the cluster: \n"
         read clustername
+cat <<EOF > /root/csi-powerscale/helm/secret.json
+{
+  "isilonClusters": [
+    {
+      "clusterName": "$clustername",
+      "username": "$isiuser",
+      "password": "$isipasswd",
+      "isiIP": "$clusterip",
+      "isDefaultCluster": true
+    }
+  ]
+}
+EOF
 
-        sed -i 's/cluster1/'$clustername'/' /root/csi-powerscale/helm/secret.json
-        sed -i 's/user/'$isiuser'/' /root/csi-powerscale/helm/secret.json
-        sed -i 's/password/'$isipasswd'/' /root/csi-powerscale/helm/secret.json
-        sed -i 's/1.2.3.4/'$clusterip'/' /root/csi-powerscale/helm/secret.json
+        #sed -i 's/cluster1/'$clustername'/' /root/csi-powerscale/helm/secret.json
+        #sed -i 's/username/'$isiuser'/' /root/csi-powerscale/helm/secret.json
+        #sed -i 's/password/'$isipasswd'/' /root/csi-powerscale/helm/secret.json
+        #sed -i 's/1.2.3.4/'$clusterip'/' /root/csi-powerscale/helm/secret.json
         kubectl create secret generic isilon-creds -n isilon --from-file=config=/root/csi-powerscale/helm/secret.json
-        printf "\n Below is the secret.yaml file, created in the cluster now:\n"
-        kubectl get secret -n isilon | grep isilon-creds
-        sleep 3
+        #printf "\n Below is the secret.yaml file, created in the cluster now:\n"
+        #kubectl get secret -n isilon | grep isilon-creds
+        #sleep 3
 
 fi
-} End of function secretstuff
+} #End of function secretstuff
 
 
 #Call the secretstuff function defined above
 secretstuff
 
 
-printf "\n Now creating an empty secret as per official CSI driver instructions"
-printf "\n Note, v1.5 creates a different secret name called isilon-certs-0"
+printf "\nNow creating an empty secret as per official CSI driver instructions"
+printf "\nNote, v1.5 creates a different secret name called isilon-certs-0 \n"
 kubectl create -f /root/csi-powerscale/helm/emptysecret.yaml
 
 
-printf "We setup the secret isilon-creds earlier that has the cluster name, and cluster IP, so that is not needed in the valyes.yaml file now \n"
-printf "\n For the next step, following should be ready
-1. A path such as /ifs/blah/csi-volumes already created on cluster
-2. No of controller PODs of driver (choose 1 if this is a single node cluster) \n"
+printf "\nWe setup the secret isilon-creds earlier that has the cluster name, and cluster IP, so that is not needed in the valyes.yaml file now \n"
+printf "\nFor the next step, following should be ready
+1. Allowed network - this is one or more networks you want to allow the nfs exports of the Persistent Volumes. Use a comma for multiple networks.
+2. A path such as /ifs/blah/csi-volumes already created on cluster. Under this path, the driver will create the volumes
+2. No of controller PODs of driver, choose 1 if this is a single node cluster, otherwise based on number of worker nodes \n"
 
-printf "If you're ready with above things, type yes, otherwise no to quit: \n\n"
+printf "\nIf you're ready with above things, type yes, otherwise no to quit: \n\n"
 read ready
 if [ $ready = yes ]
 then
@@ -173,7 +204,7 @@ cp -n /root/csi-powerscale/helm/csi-isilon/values.yaml /root/csi-powerscale/dell
 printf "\nDone.\n\n"
 sleep 3
 
-printf "Existing IP and Path parameters in the /root/csi-isilon/helm/myvalues.yaml are as shown below \n\n"
+printf "Existing IP and Path parameters in the /root/csi-powerscale/helm/myvalues.yaml are as shown below \n\n"
 cat /root/csi-powerscale/dell-csi-helm-installer/myvalues.yaml | egrep "allowedNetworks|controllerCount:|isiPath"
 echo ""
 
@@ -181,7 +212,7 @@ printf "\n\nDo you want to modify myvalues.yaml file? Asking because just in cas
 read modifyans
 if [ $modifyans = yes ]
 then
-	printf "Enter the export network of the Isilon cluster in 1.2.3.4/xx format: \n"
+	printf "Enter the export network of the Isilon cluster in CIDR format, e.g. of two networks: 1.2.3.4/xx,3.4.5.6/xx : \n"
 	read networkip
 	printf "Enter the Isilon path (e.g. /ifs/cluster/csi) for CSI driver to create it's volumes THIS PATH MUST EXIST ON ISILON: \n"
 	read isilonpath
@@ -191,16 +222,16 @@ then
 	read nfsversion
 	sleep 4
 	printf "Now changing the myvalues.yaml file for the IP and the path you supplied \n\n" 
-	sed -i 's/allowedNetworks: []/allowedNetworks: ['$networkip']/' /root/csi-isilon/dell-csi-helm-installer/myvalues.yaml
-	sed -i 's#/ifs/data/csi#'$isilonpath'#' /root/csi-isilon/dell-csi-helm-installer/myvalues.yaml
-	sed -i 's#controllerCount: 2#controllerCount: '$contpods'#' /root/csi-isilon/dell-csi-helm-installer/myvalues.yaml
-	sed -i 's#nfsV3: "true"#nfsV3: '$nfsversion'#' /root/csi-isilon/dell-csi-helm-installer/myvalues.yaml
+	sed -i 's/allowedNetworks: []/allowedNetworks: ['$networkip']/' /root/csi-powerscale/dell-csi-helm-installer/myvalues.yaml
+	sed -i 's#/ifs/data/csi#'$isilonpath'#' /root/csi-powerscale/dell-csi-helm-installer/myvalues.yaml
+	sed -i 's#controllerCount: 2#controllerCount: '$contpods'#' /root/csi-powerscale/dell-csi-helm-installer/myvalues.yaml
+	sed -i 's#nfsV3: "false"#nfsV3: "'$nfsversion'"#' /root/csi-powerscale/dell-csi-helm-installer/myvalues.yaml
 	#printf "Now changing volumesnapshotclass.yaml file for the path \n"
-	#sed -i 's#/ifs/data/csi#'$isilonpath'#' /root/csi-isilon/helm/volumesnapshotclass.yaml
-	printf "\nCheck below if i changed the network and path correctly, else modify the /root/csi-isilon/helm/myvalues.yaml files by hand \n"
-	cat /root/csi-isilon/dell-csi-helm-installer/myvalues.yaml | egrep "allowedNetworks|controllerCount:|isiPath"
+	#sed -i 's#/ifs/data/csi#'$isilonpath'#' /root/csi-powerscale/helm/volumesnapshotclass.yaml
+	printf "\nCheck below if i changed the network and path correctly, else modify the /root/csi-powerscale/helm/myvalues.yaml files by hand \n"
+	cat /root/csi-powerscale/dell-csi-helm-installer/myvalues.yaml | egrep "allowedNetworks|controllerCount:|isiPath"
 	echo ""
-	#cat /root/csi-isilon/helm/volumesnapshotclass.yaml | grep IsiPath
+	#cat /root/csi-powerscale/helm/volumesnapshotclass.yaml | grep IsiPath
 fi
 
 
@@ -217,7 +248,7 @@ sleep 10
 
 #Last step - verify the kubernetes script that comes with the CSI Driver files we cloned in the beginning of script
 #No problem in running the verify.kubernetes every time we're called upon, nothing changes
-printf "\n\nModifying permissions to executable on /root/csi-isilon/dell-csi-helm-installer/verify.sh \n"
+printf "\n\nModifying permissions to executable on /root/csi-powerscale/dell-csi-helm-installer/verify.sh \n"
 chmod 755 /root/csi-powerscale/dell-csi-helm-installer/*.sh
 
 
